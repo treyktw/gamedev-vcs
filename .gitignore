@@ -6,3 +6,5 @@
 
 
 /cmd/vcs-server/storage
+
+.env
