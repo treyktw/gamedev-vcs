@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vcs-system
+  labels:
+    name: vcs-system
+    app.kubernetes.io/name: gamedev-vcs
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: namespace
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: vcs-resource-quota
+  namespace: vcs-system
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16" 
+    limits.memory: 32Gi
+    persistentvolumeclaims: "10"
+    services: "10"
+    secrets: "10"
+    configmaps: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: vcs-limit-range
+  namespace: vcs-system
+spec:
+  limits:
+  - default:
+      cpu: "1"
+      memory: 2Gi
+    defaultRequest:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
+  - default:
+      storage: 10Gi
+    type: PersistentVolumeClaim

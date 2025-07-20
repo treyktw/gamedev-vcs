@@ -1,0 +1,8 @@
+/test-workspace
+/storage
+/examples
+/data
+.vcs
+
+
+/cmd/vcs-server/storage

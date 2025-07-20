@@ -1,0 +1,267 @@
+version: '3.8'
+
+services:
+  # Redis for real-time state management
+  redis:
+    image: redis:7-alpine
+    container_name: vcs-redis-prod
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"  # Bind to localhost only
+    volumes:
+      - redis_data:/data
+      - ./redis-prod.conf:/etc/redis/redis.conf:ro
+    command: redis-server /etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - vcs-backend
+
+  # ClickHouse for analytics
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.12
+    container_name: vcs-clickhouse-prod
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8123:8123"  # Bind to localhost only
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ./clickhouse-prod:/etc/clickhouse-server:ro
+    environment:
+      CLICKHOUSE_DB: vcs_analytics
+      CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - vcs-backend
+
+  # VCS API Server
+  vcs-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    image: vcs-server:${VERSION:-latest}
+    container_name: vcs-api-prod
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - vcs_storage:/app/storage
+      - vcs_logs:/app/logs
+    environment:
+      ENVIRONMENT: production
+      PORT: 8080
+      STORAGE_PATH: /app/storage
+      REDIS_URL: redis://redis:6379/0
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DATABASE: vcs_analytics
+      CLICKHOUSE_USERNAME: ${CLICKHOUSE_USERNAME}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      GIN_MODE: release
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - vcs-backend
+      - vcs-frontend
+
+  # Nginx reverse proxy and load balancer
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: vcs-nginx-prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - vcs_logs:/var/log/nginx
+    depends_on:
+      - vcs-api
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - vcs-frontend
+
+  # Automated backup service
+  backup:
+    image: amazon/aws-cli:latest
+    container_name: vcs-backup-prod
+    restart: unless-stopped
+    volumes:
+      - vcs_storage:/storage:ro
+      - clickhouse_data:/clickhouse-backup:ro
+      - ./backup-scripts:/scripts:ro
+      - ~/.aws:/root/.aws:ro
+    environment:
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      BACKUP_SCHEDULE: "0 2 * * *"  # Daily at 2 AM
+      S3_BUCKET: ${S3_BACKUP_BUCKET}
+    command: ["/scripts/backup-daemon.sh"]
+    depends_on:
+      - vcs-api
+      - clickhouse
+    networks:
+      - vcs-backend
+
+  # Monitoring with Prometheus (optional)
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: vcs-prometheus-prod
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    profiles:
+      - monitoring
+    networks:
+      - vcs-backend
+
+  # Grafana for monitoring dashboards (optional)
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: vcs-grafana-prod
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+    networks:
+      - vcs-backend
+
+volumes:
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/vcs/redis
+  clickhouse_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/vcs/clickhouse
+  clickhouse_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/vcs/clickhouse
+  vcs_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/vcs/storage
+  vcs_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/vcs
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  vcs-frontend:
+    driver: bridge
+  vcs-backend:
+    driver: bridge
+    internal: true

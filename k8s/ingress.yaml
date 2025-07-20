@@ -1,0 +1,194 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vcs-ingress
+  namespace: vcs-system
+  labels:
+    app.kubernetes.io/name: vcs-ingress
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: gamedev-vcs
+  annotations:
+    # Traefik annotations (adjust for your ingress controller)
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+    
+    # Rate limiting, CORS/security headers, and file upload size limits (for large game assets)
+    traefik.ingress.kubernetes.io/router.middlewares: vcs-system-rate-limit@kubernetescrd,vcs-system-security-headers@kubernetescrd,vcs-system-body-limit@kubernetescrd
+    
+    # Alternative nginx annotations (uncomment if using nginx-ingress)
+    # nginx.ingress.kubernetes.io/proxy-body-size: "5g"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # nginx.ingress.kubernetes.io/client-body-timeout: "300"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  podSelector: {}
+  tls:
+  - hosts:
+    - vcs.yourstudio.com
+    - api.vcs.yourstudio.com
+    secretName: vcs-tls-secret
+  rules:
+  - host: vcs.yourstudio.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: vcs-api
+            port:
+              number: 8080
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: vcs-api
+            port:
+              number: 8080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vcs-dashboard  # Web dashboard (to be implemented)
+            port:
+              number: 4000
+  - host: api.vcs.yourstudio.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vcs-api
+            port:
+              number: 8080
+
+---
+# Traefik Middleware for rate limiting
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  namespace: vcs-system
+spec:
+  podSelector: {}  # This selects all pods in the namespace; adjust as needed
+  rateLimit:
+    burst: 100
+    period: 1m
+    average: 100
+    sourceCriterion:
+      requestHeaderName: X-Forwarded-For
+
+---
+# Traefik Middleware for security headers
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  namespace: vcs-system
+spec:
+  podSelector: {}  # This selects all pods in the namespace; adjust as needed
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: "https"
+    customResponseHeaders:
+      X-Content-Type-Options: "nosniff"
+      X-Frame-Options: "DENY"
+      X-XSS-Protection: "1; mode=block"
+      Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+      Referrer-Policy: "strict-origin-when-cross-origin"
+      Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss:; frame-ancestors 'none';"
+
+---
+# Traefik Middleware for body size limits
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: body-limit
+  namespace: vcs-system
+spec:
+  podSelector: {}  # This selects all pods in the namespace; adjust as needed
+  buffering:
+    maxRequestBodyBytes: 5368709120  # 5GB for large game assets
+    memRequestBodyBytes: 104857600   # 100MB in memory
+    maxResponseBodyBytes: 5368709120
+    memResponseBodyBytes: 104857600
+
+---
+# TLS Certificate (if using cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vcs-tls-cert
+  namespace: vcs-system
+spec:
+  podSelector: {}  # This selects all pods in the namespace; adjust as needed
+  secretName: vcs-tls-secret
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - vcs.yourstudio.com
+  - api.vcs.yourstudio.com
+
+---
+# Network Policy for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vcs-network-policy
+  namespace: vcs-system
+spec:
+  podSelector: {}  # This selects all pods in the namespace; adjust as needed
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-system
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: vcs-api
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: clickhouse
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: clickhouse
+    ports:
+    - protocol: TCP
+      port: 8123
+    - protocol: TCP
+      port: 9000
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS outbound (for S3, etc.)
+    - protocol: TCP
+      port: 80   # HTTP outbound

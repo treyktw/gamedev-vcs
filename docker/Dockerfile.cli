@@ -1,0 +1,73 @@
+# Multi-stage build for VCS CLI
+FROM golang:1.24-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies (cached layer)
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build CLI for multiple platforms
+RUN mkdir -p /dist
+
+# Linux AMD64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o /dist/vcs-linux-amd64 \
+    ./cmd/vcs
+
+# Windows AMD64
+RUN CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o /dist/vcs-windows-amd64.exe \
+    ./cmd/vcs
+
+# macOS AMD64
+RUN CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o /dist/vcs-darwin-amd64 \
+    ./cmd/vcs
+
+# macOS ARM64 (Apple Silicon)
+RUN CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o /dist/vcs-darwin-arm64 \
+    ./cmd/vcs
+
+# Final stage - CLI distribution
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates curl
+
+# Create non-root user
+RUN addgroup -g 1001 -S vcs && \
+    adduser -u 1001 -S vcs -G vcs
+
+WORKDIR /app
+
+# Copy all built binaries
+COPY --from=builder /dist/* ./
+
+# Switch to non-root user
+USER vcs
+
+# Default to Linux binary
+RUN ln -s vcs-linux-amd64 vcs
+
+# Entry point for running CLI
+ENTRYPOINT ["./vcs"]
+CMD ["--help"]

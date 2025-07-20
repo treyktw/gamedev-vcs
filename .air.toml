@@ -1,0 +1,33 @@
+# .air.toml
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o tmp/vcs-dev ./cmd/vcs-server"
+bin = "tmp/vcs-dev"
+include_ext = ["go", "tpl", "tmpl"]
+exclude_dir = ["vendor", "node_modules", "dist", "web", "test-workspace"]
+exclude_file = ["README.md"]
+delay = 500 # ms
+log = "stdout"
+
+[log]
+time = true
+
+[color]
+main = "yellow"
+watcher = "cyan"
+build = "green"
+runner = "magenta"
+
+[env]
+ENVIRONMENT = "development"
+PORT = "8080"
+STORAGE_PATH = "/app/storage"
+REDIS_URL = "redis://redis:6379/0"
+CLICKHOUSE_URL = "http://clickhouse:8123"
+CLICKHOUSE_DATABASE = "vcs_analytics"
+CLICKHOUSE_USERNAME = "vcs_user"
+CLICKHOUSE_PASSWORD = "dev_password"
+JWT_SECRET = "dev-jwt-secret-key-change-in-prod"
+GIN_MODE = "debug"

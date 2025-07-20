@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  # Redis for real-time state management
+  redis:
+    image: redis:7-alpine
+    container_name: vcs-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/etc/redis/redis.conf:ro
+    command: redis-server /etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - vcs-network
+
+  # ClickHouse for analytics
+  clickhouse:
+      image: clickhouse/clickhouse-server:23.12
+      container_name: vcs-clickhouse-dev
+      ports:
+        - "8123:8123"  # HTTP interface
+        - "9000:9000"  # Native interface
+      volumes:
+        - clickhouse_data:/var/lib/clickhouse
+      environment:
+        CLICKHOUSE_DB: vcs_analytics
+        CLICKHOUSE_USER: vcs_user
+        CLICKHOUSE_PASSWORD: dev_password
+        CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      healthcheck:
+        test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 30s
+      ulimits:
+        nofile:
+          soft: 262144
+          hard: 262144
+      networks:
+        - vcs-network
+
+  # VCS API Server (Development with hot reload)
+  vcs-api-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: vcs-api-dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../:/app:cached
+      - vcs_storage:/app/storage
+    environment:
+      ENVIRONMENT: development
+      PORT: 8080
+      STORAGE_PATH: /app/storage
+      REDIS_URL: redis://redis:6379/0
+      CLICKHOUSE_URL: clickhouse:9000
+      CLICKHOUSE_DATABASE: vcs_analytics
+      CLICKHOUSE_USERNAME: vcs_user
+      CLICKHOUSE_PASSWORD: dev_password
+      JWT_SECRET: dev-jwt-secret-key-change-in-prod
+      GIN_MODE: debug
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - vcs-network
+
+  # Optional: Adminer for database management
+  adminer:
+    image: adminer:4.8.1
+    container_name: vcs-adminer-dev
+    ports:
+      - "8081:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: clickhouse
+    networks:
+      - vcs-network
+
+  # Optional: Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: vcs-redis-commander-dev
+    ports:
+      - "8082:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - vcs-network
+
+  # File storage backup to S3 (optional)
+  storage-backup:
+    image: amazon/aws-cli:latest
+    container_name: vcs-backup-dev
+    volumes:
+      - vcs_storage:/storage:ro
+      - ~/.aws:/root/.aws:ro
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+    command: ["sleep", "infinity"]  # Keep container running for manual backups
+    profiles:
+      - backup
+    networks:
+      - vcs-network
+
+  ch-ui:
+    image: ghcr.io/caioricciuti/ch-ui:latest
+    container_name: vcs-ch-ui
+    ports:
+      - "5521:5521"
+    environment:
+      VITE_CLICKHOUSE_URL: "http://clickhouse:8123"
+      VITE_CLICKHOUSE_USER: "vcs_user"
+      VITE_CLICKHOUSE_PASSWORD: "dev_password"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - vcs-network
+
+volumes:
+  redis_data:
+    driver: local
+  clickhouse_data:
+    driver: local
+  clickhouse_logs:
+    driver: local
+  vcs_storage:
+    driver: local
+
+networks:
+  vcs-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
