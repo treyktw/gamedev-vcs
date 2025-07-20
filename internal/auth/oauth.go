@@ -64,65 +64,11 @@ type QuickSignupRequest struct {
 }
 
 // // NewGoogleOAuthConfig creates OAuth configuration
-// func NewGoogleOAuthConfig() *GoogleOAuthConfig {
-// 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
-// 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-// 	redirectURL := os.Getenv("GOOGLE_REDIRECT_URL")
-
-// 	log.Printf("Environment check:")
-// 	log.Printf("  GOOGLE_CLIENT_ID: %s", clientID)
-// 	log.Printf("  GOOGLE_CLIENT_SECRET: %s", func() string {
-// 		if clientSecret == "" {
-// 			return "EMPTY/NOT_SET"
-// 		}
-// 		return clientSecret[:10] + "..." // Show first 10 chars
-// 	}())
-// 	log.Printf("  GOOGLE_REDIRECT_URL: %s", redirectURL)
-
-// 	// Default values for development
-// 	if clientID == "" {
-// 		clientID = "337458724787-rdh1frb7e5qp6c9a6pu205ls87m7kcp1.apps.googleusercontent.com"
-// 	}
-// 	if redirectURL == "" {
-// 		redirectURL = "http://localhost:8080/api/v1/auth/google/callback"
-// 	}
-
-// 	if clientSecret == "" {
-// 		clientSecret = "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"
-// 	}
-
-// 	config := &GoogleOAuthConfig{
-// 		ClientID:     clientID,
-// 		ClientSecret: clientSecret,
-// 		RedirectURL:  redirectURL,
-// 	}
-
-// 	config.oauth2Config = &oauth2.Config{
-// 		ClientID:     clientID,
-// 		ClientSecret: clientSecret,
-// 		RedirectURL:  redirectURL,
-// 		Scopes: []string{
-// 			"https://www.googleapis.com/auth/userinfo.email",
-// 			"https://www.googleapis.com/auth/userinfo.profile",
-// 		},
-// 		Endpoint: google.Endpoint,
-// 	}
-
-// 	return config
-// }
 
 // NewGoogleOAuthConfigWithCallback creates OAuth configuration with custom redirect URL
 func NewGoogleOAuthConfigWithCallback(callbackURL string) *GoogleOAuthConfig {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
-
-	// Use hardcoded values if env vars are empty
-	if clientID == "" {
-		clientID = "337458724787-rdh1frb7e5qp6c9a6pu205ls87m7kcp1.apps.googleusercontent.com"
-	}
-	if clientSecret == "" {
-		clientSecret = "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"
-	}
 
 	log.Printf("Using custom callback URL: %s", callbackURL)
 
